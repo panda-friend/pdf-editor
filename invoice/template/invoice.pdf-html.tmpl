@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="" xml:lang="">
+<head>
+<title>invoice.pdf-html.html</title>
+
+<meta http-equiv="Content-Type" content="text/html; charset=UTF-8"/>
+ <br/>
+<style type="text/css">
+<!--
+	p {margin: 0; padding: 0;}	.ft10{font-size:13px;font-family:MPDFAA+DejaVuSansCondensed;color:#545454;}
+	.ft11{font-size:24px;font-family:MPDFAA+DejaVuSansCondensed;color:#000000;}
+	.ft12{font-size:24px;font-family:MPDFAA+DejaVuSansCondensed;color:#008000;}
+	.ft13{font-size:13px;font-family:MPDFAA+DejaVuSansCondensed;color:#545454;}
+	.ft14{font-size:13px;font-family:MPDFAA+DejaVuSansCondensed;color:#ffffff;}
+	.ft15{font-size:13px;line-height:17px;font-family:MPDFAA+DejaVuSansCondensed;color:#545454;}
+	.ft16{font-size:13px;line-height:17px;font-family:MPDFAA+DejaVuSansCondensed;color:#545454;}
+-->
+</style>
+</head>
+<body bgcolor="#A0A0A0" vlink="blue" link="blue">
+<div id="page1-div" style="position:relative;width:892px;height:1262px;">
+<img width="892" height="1262" src="invoice.pdf001.png" alt="background image"/>
+<p style="position:absolute;top:85px;left:651px;white-space:nowrap;text-align: right" class="ft10">MatchX GmbH<br/>Brückenstraße 4<br/>10179 Berlin<br/>Germany<br/>Tax number: 37/436/50071<br/>awesome@matchx.io<br/>VAT ID: DE309834893</p>
+<p style="position:absolute;top:1197px;left:98px;white-space:nowrap" class="ft15">INVOICE NUMBER MUST BE INCLUDED WITH YOUR BANK PAYMENT OTHERWISE DELAYS<br/>MAY OCCUR</p>
+<p style="position:absolute;top:1215px;left:760px;white-space:nowrap;text-align: right" class="ft10">1 of 1</p>
+<p style="position:absolute;top:267px;left:96px;white-space:nowrap" class="ft11"><b>Invoice</b></p>
+<p style="position:absolute;top:267px;left:683px;white-space:nowrap" class="ft12"><b>{{ .Status }}</b></p>
+<p style="position:absolute;top:325px;left:96px;white-space:nowrap" class="ft15">{{ .InvoiceNumber }}<br/>{{ .InvoiceDate }}<br/>{{ .OrderDate }}<br/>{{ .OrderNumber }}<br/>{{ .PaymentMethod }}<br/>{{ .ShippingMethod }}</p>
+<p style="position:absolute;top:325px;left:452px;white-space:nowrap" class="ft15"><b>Bill to:<br/></b>{{ .BillToName }}<br/>{{ .BillToStreet }}<br/>{{ .BillToCity }}<br/>{{ .BillToCountry }}</p>
+<p style="position:absolute;top:325px;left:670px;white-space:nowrap" class="ft13"><b>Ship to:</b><br/>{{ .ShipToName }}<br/>{{ .ShipToStreet }}<br/>{{ .ShipToCity }}<br/>{{ .ShipToCountry }}</p>
+<p style="position:absolute;top:472px;left:96px;white-space:nowrap" class="ft14"><b>Description</b></p>
+<p style="position:absolute;top:472px;left:490px;white-space:nowrap" class="ft14"><b>Qty</b></p>
+<p style="position:absolute;top:472px;left:600px;white-space:nowrap" class="ft14"><b>VAT %</b></p>
+<p style="position:absolute;top:472px;left:736px;white-space:nowrap" class="ft14"><b>Total</b></p>
+<p style="position:absolute;top:501px;left:96px;white-space:nowrap" class="ft10">M2 Pro - LPWAN Crypto Miner</p>
+<p style="position:absolute;top:501px;left:495px;white-space:nowrap" class="ft10">{{ .Quantity }}</p>
+<p style="position:absolute;top:501px;left:605px;white-space:nowrap" class="ft10">{{ .VATPercentage }}</p>
+<p style="position:absolute;top:501px;left:741px;white-space:nowrap" class="ft10">{{ .GatewayTotalPrice }}</p>
+<p style="position:absolute;top:562px;left:452px;white-space:nowrap" class="ft10">Shipping:</p>
+<p style="position:absolute;top:562px;left:741px;white-space:nowrap" class="ft10">{{ .Shipping }}</p>
+<p style="position:absolute;top:593px;left:452px;white-space:nowrap" class="ft10">Total excl. VAT:</p>
+<p style="position:absolute;top:593px;left:741px;white-space:nowrap" class="ft10">{{ .TotalExclVAT }}</p>
+<p style="position:absolute;top:625px;left:452px;white-space:nowrap" class="ft10">VAT @ {{ .VATPercentage }}:</p>
+<p style="position:absolute;top:625px;left:741px;white-space:nowrap" class="ft10">{{ .VATTotal}}</p>
+<p style="position:absolute;top:657px;left:452px;white-space:nowrap" class="ft13"><b>Total:</b></p>
+<p style="position:absolute;top:657px;left:741px;white-space:nowrap" class="ft13"><b>{{ .Total }}</b></p>
+<p style="position:absolute;top:958px;left:99px;white-space:nowrap" class="ft15">Payment details:<br/>Payment must be made within 30 days from issue date.</p>
+<p style="position:absolute;top:1012px;left:99px;white-space:nowrap" class="ft15">BIC: PBNKDEFF<br/>IBAN: DE12 1001 0010 0685 1601 27<br/>BANK: Post Bank<br/>ACCOUNT HOLDER: MatchX GmbH</p>
+<p style="position:absolute;top:1102px;left:99px;white-space:nowrap" class="ft10">PayPal: info@matchx.io</p>
+</div>
+</body>
+</html>
