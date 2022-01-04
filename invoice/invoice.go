@@ -1,13 +1,17 @@
 package invoice
 
 import (
+	"bytes"
 	"embed"
+	"encoding/base64"
 	"fmt"
 	htmlp "html/template"
 	"io/fs"
+	"log"
+	"os"
 	"path/filepath"
-	"runtime"
 
+	wrpdf "github.com/adrg/go-wkhtmltopdf"
 	rdpdf "github.com/ledongthuc/pdf"
 )
 
@@ -19,7 +23,13 @@ var tmpFS embed.FS
 
 type PDFCreator struct {
 	tmpl   *htmlp.Template
-	params map[string]string
+	images map[string][]byte
+	reader func(r *rdpdf.Reader) ([][]string, error)
+}
+
+type pdf struct {
+	params map[string]interface{}
+	tmpl   *htmlp.Template
 	images map[string][]byte
 	reader func(r *rdpdf.Reader) ([][]string, error)
 }
@@ -27,7 +37,6 @@ type PDFCreator struct {
 func New(readerFun func(r *rdpdf.Reader) ([][]string, error)) (*PDFCreator, error) {
 	c := &PDFCreator{
 		reader: readerFun,
-		params: make(map[string]string),
 	}
 	err := c.loadInvoiceTemplate()
 	if err != nil {
@@ -53,6 +62,9 @@ func (c *PDFCreator) loadInvoiceTemplate() error {
 		if d.IsDir() {
 			return nil
 		}
+		if filepath.Ext(path) != ".png" {
+			return nil
+		}
 		images[path], err = fs.ReadFile(tmpFS, path)
 		if err != nil {
 			return fmt.Errorf("couldn't read %s: %v", path, err)
@@ -62,30 +74,77 @@ func (c *PDFCreator) loadInvoiceTemplate() error {
 	if err != nil {
 		return fmt.Errorf("couldn't read images: %v", err)
 	}
+	c.images = images
+	c.tmpl = htmlTmpl
+	return nil
+}
 
-	err = fs.WalkDir(contentFS, ".", func(path string, d fs.DirEntry, err error) error {
+func (c *PDFCreator) RecreatePDF() error {
+	err := fs.WalkDir(contentFS, ".", func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 		if d.IsDir() {
 			return nil
 		}
-		err = c.parseParamsFromPDF(path)
+		pdfObj := &pdf{
+			params: make(map[string]interface{}),
+			tmpl:   c.tmpl,
+			images: c.images,
+			reader: c.reader,
+		}
+		err = pdfObj.parseParamsFromPDF(path)
+		if err != nil {
+			return err
+		}
+		err = pdfObj.regenerateInvoicePDF(path)
 		if err != nil {
 			return err
 		}
 		return nil
 	})
 	if err != nil {
-		return fmt.Errorf("couldn't read pdfs: %v", err)
+		return err
 	}
 
-	c.images = images
-	c.tmpl = htmlTmpl
 	return nil
 }
 
-func (c *PDFCreator) parseParamsFromPDF(path string) error {
+func compareStringArray(a []string, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := 0; i < len(a); i++ {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+var pdfHead = []string{
+	"MatchX GmbH",
+	"Brückenstraße 4",
+	"10179 Berlin",
+	"Germany",
+	"Tax number: 37/436/50071",
+	"awesome@matchx.io",
+	"VAT ID: DE309834893",
+	"INVOICE NUMBER MUST BE INCLUDED WITH YOUR BANK PAYMENT OTHERWISE DELAYS",
+	"MAY OCCUR",
+	"1 of 1",
+}
+var pdfPaymentInfo = []string{
+	"Payment details:",
+	"Payment must be made within 30 days from issue date.",
+	"BIC: PBNKDEFF",
+	"IBAN: DE12 1001 0010 0685 1601 27",
+	"BANK: Post Bank",
+	"ACCOUNT HOLDER: MatchX GmbH",
+	"PayPal: info@matchx.io",
+}
+
+func (p *pdf) parseParamsFromPDF(path string) error {
 	f, r, err := rdpdf.Open(filepath.Join("invoice", path))
 	defer func() {
 		_ = f.Close()
@@ -93,33 +152,12 @@ func (c *PDFCreator) parseParamsFromPDF(path string) error {
 	if err != nil {
 		return err
 	}
-	content, err := c.reader(r)
+	content, err := p.reader(r)
 	if err != nil {
 		return fmt.Errorf("couldn't read %s: %v", path, err)
 	}
-	pdfHead := []string{
-		"MatchX GmbH",
-		"Brückenstraße 4",
-		"10179 Berlin",
-		"Germany",
-		"Tax number: 37/436/50071",
-		"awesome@matchx.io",
-		"VAT ID: DE309834893",
-		"INVOICE NUMBER MUST BE INCLUDED WITH YOUR BANK PAYMENT OTHERWISE DELAYS",
-		"MAY OCCUR",
-		"1 of 1",
-	}
-	pdfPaymentDetails := []string{
-		"Payment details:",
-		"Payment must be made within 30 days from issue date.",
-		"BIC: PBNKDEFF",
-		"IBAN: DE12 1001 0010 0685 1601 27",
-		"BANK: Post Bank",
-		"ACCOUNT HOLDER: MatchX GmbH",
-		"PayPal: info@matchx.io",
-	}
 
-	pdfInvoiceDetails := []string{
+	invoiceDetails := []string{
 		"InvoiceNumber",
 		"InvoiceDate",
 		"OrderDate",
@@ -143,22 +181,18 @@ func (c *PDFCreator) parseParamsFromPDF(path string) error {
 	nextIdx := 0
 	for _, row := range content {
 		// match head
-		for i := nextIdx; i < nextIdx+len(pdfHead); i++ {
-			if row[i] != pdfHead[i] {
-				return fmt.Errorf("not able to parse format at row %d", i)
-			}
+		if !compareStringArray(row[nextIdx:nextIdx+len(pdfHead)], pdfHead) {
+			return fmt.Errorf("not able to parse pdf head")
 		}
 		nextIdx += len(pdfHead)
 		// match invoice status
 		if row[nextIdx] != "Invoice" {
-			return fmt.Errorf("not able to parse format at row %d", len(pdfHead))
+			return fmt.Errorf("not able to parse format at row %s, expect \"Invoice\"", row[nextIdx])
 		}
 		if row[nextIdx+1] == "PAID" {
-			//pdfInvoiceStatus = append(pdfInvoiceStatus, "PAID")
-			c.params["Status"] = "PAID"
+			p.params["Status"] = "PAID"
 			nextIdx += 2
 		}
-		runtime.Breakpoint()
 		// match invoice details
 		oldIdx := nextIdx
 		for i := 0; i < len(row); i++ {
@@ -166,10 +200,10 @@ func (c *PDFCreator) parseParamsFromPDF(path string) error {
 				nextIdx += i + 1
 				break
 			}
-			c.params[pdfInvoiceDetails[i]] = row[nextIdx+i]
+			p.params[invoiceDetails[i]] = row[nextIdx+i]
 		}
 		if oldIdx == nextIdx {
-			return fmt.Errorf("not able to parse format at row %d", oldIdx)
+			return fmt.Errorf("not able to detect \"Bill to:\"")
 		}
 
 		// match bill to
@@ -179,11 +213,11 @@ func (c *PDFCreator) parseParamsFromPDF(path string) error {
 				nextIdx += i + 1
 				break
 			}
-			c.params[pdfBillTo[i]] = row[nextIdx+i]
+			p.params[pdfBillTo[i]] = row[nextIdx+i]
 		}
 		// didn't match beginning of ship to
 		if oldIdx == nextIdx {
-			return fmt.Errorf("not able to parse format at row %d", oldIdx)
+			return fmt.Errorf("not able to detect \"Ship to:\"")
 		}
 		// match ship to
 		oldIdx = nextIdx
@@ -192,31 +226,88 @@ func (c *PDFCreator) parseParamsFromPDF(path string) error {
 				nextIdx += i + 1
 				break
 			}
-			c.params[pdfShipTo[i]] = row[nextIdx+i]
+			p.params[pdfShipTo[i]] = row[nextIdx+i]
 		}
 		if oldIdx == nextIdx {
-			return fmt.Errorf("not able to parse format at row %d", oldIdx)
+			return fmt.Errorf("not able to detect \"Description\"")
 		}
+
 		// match payment details
 		oldIdx = nextIdx
 		for i := nextIdx; i < len(row); i++ {
-			if row[i] == pdfPaymentDetails[0] {
+			if row[i] == pdfPaymentInfo[0] {
 				nextIdx = i
 				break
 			}
+			if row[i] == "Qty" {
+				p.params["Description"] = row[i+2]
+				p.params["Quantity"] = row[i+3]
+				//p.params["GatewayTotalPrice"] = row[i+4]
+			}
+			if row[i] == "Discount:" {
+				p.params["Discount"] = row[i+1]
+			}
+			if row[i] == "Shipping:" {
+				p.params["Shipping"] = row[i+1]
+			}
 		}
 		if oldIdx == nextIdx {
-			return fmt.Errorf("not able to parse format at row %d", oldIdx)
+			return fmt.Errorf("not able to detect %s", pdfPaymentInfo[0])
 		}
-		for i := 0; i < len(pdfPaymentDetails); i++ {
-			if pdfPaymentDetails[i] != row[nextIdx+i] {
-				return fmt.Errorf("not able to parse format at row %d", nextIdx+i)
-			}
+
+		if !compareStringArray(row[nextIdx:nextIdx+len(pdfPaymentInfo)], pdfPaymentInfo) {
+			return fmt.Errorf("not able to parse payment info")
 		}
 	}
 	return nil
 }
 
-func (c *PDFCreator) RegenerateInvoicePDF() error {
+func (p *pdf) regenerateInvoicePDF(path string) error {
+	template := p.tmpl.Lookup("invoice.pdf-html.tmpl")
+	if template == nil {
+		return fmt.Errorf("template invoice.pdf-html.tmpl not found")
+	}
+	p.params["BackgroundImg"] = base64.StdEncoding.EncodeToString(p.images["invoice.pdf001.png"])
+	buff := bytes.NewBuffer(nil)
+	if err := template.Execute(buff, p.params); err != nil {
+		return fmt.Errorf("failed to render template invoice.pdf-html.tmpl: %v", err)
+	}
+
+	if err := wrpdf.Init(); err != nil {
+		return fmt.Errorf("failted to init pdf library: %v", err)
+	}
+	defer wrpdf.Destroy()
+
+	object, err := wrpdf.NewObjectFromReader(buff)
+	if err != nil {
+		return fmt.Errorf("cannot create new pdf object: %v", err)
+	}
+	converter, err := wrpdf.NewConverter()
+	if err != nil {
+		return fmt.Errorf("cannot create new converter: %v", err)
+	}
+	defer converter.Destroy()
+	converter.Add(object)
+	converter.PaperSize = wrpdf.A4
+
+	// Convert objects and save the output PDF document.
+	f, err := os.Stat(filepath.Join("invoice", "new"))
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	} else if (err == nil && !f.IsDir()) || (err != nil && os.IsNotExist(err)) {
+		if err := os.MkdirAll(filepath.Join("invoice", "new"), os.FileMode(0755)); err != nil {
+			return err
+		}
+	}
+
+	outFile, err := os.Create(filepath.Join("invoice", "new", filepath.Base(path)))
+	if err != nil {
+		return fmt.Errorf("failed to create file %s: %v", path, err)
+	}
+	defer outFile.Close()
+
+	if err := converter.Run(outFile); err != nil {
+		log.Fatal(err)
+	}
 	return nil
 }

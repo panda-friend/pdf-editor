@@ -12,7 +12,8 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	err = pdfCreator.RegenerateInvoicePDF()
+
+	err = pdfCreator.RecreatePDF()
 	if err != nil {
 		panic(err)
 	}
@@ -32,7 +33,7 @@ func ReadPdfInRow(r *rdpdf.Reader) ([][]string, error) {
 		for _, row := range rows {
 			joinRow := []string{}
 			for _, v := range row.Content {
-				if v.S == "" {
+				if v.S == "" || v.S == "¬" {
 					continue
 				}
 				joinRow = append(joinRow, v.S)
