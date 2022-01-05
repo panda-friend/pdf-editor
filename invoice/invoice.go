@@ -3,16 +3,17 @@ package invoice
 import (
 	"bytes"
 	"embed"
-	"encoding/base64"
 	"fmt"
 	htmlp "html/template"
 	"io/fs"
-	"log"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 
 	wrpdf "github.com/adrg/go-wkhtmltopdf"
 	rdpdf "github.com/ledongthuc/pdf"
+	"github.com/leekchan/accounting"
 )
 
 //go:embed pdf
@@ -22,9 +23,13 @@ var contentFS embed.FS
 var tmpFS embed.FS
 
 type PDFCreator struct {
-	tmpl   *htmlp.Template
-	images map[string][]byte
-	reader func(r *rdpdf.Reader) ([][]string, error)
+	tmpl       *htmlp.Template
+	images     map[string][]byte
+	reader     func(r *rdpdf.Reader) ([][]string, error)
+	pdfObjList []struct {
+		path   string
+		pdfObj *pdf
+	}
 }
 
 type pdf struct {
@@ -106,7 +111,6 @@ func (c *PDFCreator) RecreatePDF() error {
 	if err != nil {
 		return err
 	}
-
 	return nil
 }
 
@@ -157,26 +161,9 @@ func (p *pdf) parseParamsFromPDF(path string) error {
 		return fmt.Errorf("couldn't read %s: %v", path, err)
 	}
 
-	invoiceDetails := []string{
-		"InvoiceNumber",
-		"InvoiceDate",
-		"OrderDate",
-		"OrderNumber",
-		"PaymentMethod",
-		"ShippingMethod",
-	}
-	pdfBillTo := []string{
-		"BillToName",
-		"BillToStreet",
-		"BillToCity",
-		"BillToCountry",
-	}
-	pdfShipTo := []string{
-		"ShipToName",
-		"ShipToStreet",
-		"ShipToCity",
-		"ShipToCountry",
-	}
+	invoiceDetails := []string{}
+	billTo := []string{}
+	shipTo := []string{}
 
 	nextIdx := 0
 	for _, row := range content {
@@ -200,8 +187,9 @@ func (p *pdf) parseParamsFromPDF(path string) error {
 				nextIdx += i + 1
 				break
 			}
-			p.params[invoiceDetails[i]] = row[nextIdx+i]
+			invoiceDetails = append(invoiceDetails, row[nextIdx+i])
 		}
+		p.params["InvoiceDetailsList"] = invoiceDetails
 		if oldIdx == nextIdx {
 			return fmt.Errorf("not able to detect \"Bill to:\"")
 		}
@@ -213,8 +201,9 @@ func (p *pdf) parseParamsFromPDF(path string) error {
 				nextIdx += i + 1
 				break
 			}
-			p.params[pdfBillTo[i]] = row[nextIdx+i]
+			billTo = append(billTo, row[nextIdx+i])
 		}
+		p.params["BillToList"] = billTo
 		// didn't match beginning of ship to
 		if oldIdx == nextIdx {
 			return fmt.Errorf("not able to detect \"Ship to:\"")
@@ -226,8 +215,9 @@ func (p *pdf) parseParamsFromPDF(path string) error {
 				nextIdx += i + 1
 				break
 			}
-			p.params[pdfShipTo[i]] = row[nextIdx+i]
+			shipTo = append(shipTo, row[nextIdx+i])
 		}
+		p.params["ShipToList"] = shipTo
 		if oldIdx == nextIdx {
 			return fmt.Errorf("not able to detect \"Description\"")
 		}
@@ -242,13 +232,18 @@ func (p *pdf) parseParamsFromPDF(path string) error {
 			if row[i] == "Qty" {
 				p.params["Description"] = row[i+2]
 				p.params["Quantity"] = row[i+3]
-				//p.params["GatewayTotalPrice"] = row[i+4]
 			}
 			if row[i] == "Discount:" {
-				p.params["Discount"] = row[i+1]
+				p.params["Discount"] = strings.ReplaceAll(row[i+1], ".", "")
+				p.params["Discount"] = strings.ReplaceAll(p.params["Discount"].(string), ",", ".")
 			}
 			if row[i] == "Shipping:" {
-				p.params["Shipping"] = row[i+1]
+				p.params["Shipping"] = strings.ReplaceAll(row[i+1], ".", "")
+				p.params["Shipping"] = strings.ReplaceAll(p.params["Shipping"].(string), ",", ".")
+			}
+			if row[i] == "Subtotal:" {
+				p.params["GatewayTotalPrice"] = strings.ReplaceAll(row[i+1], ".", "")
+				p.params["GatewayTotalPrice"] = strings.ReplaceAll(p.params["GatewayTotalPrice"].(string), ",", ".")
 			}
 		}
 		if oldIdx == nextIdx {
@@ -262,21 +257,138 @@ func (p *pdf) parseParamsFromPDF(path string) error {
 	return nil
 }
 
+type vat struct {
+	rateUnderLimit float64
+	rateOverLimit  float64
+}
+
+var vatMap = map[string]*vat{
+	"Germany": {
+		rateOverLimit:  0.19,
+		rateUnderLimit: 0.19,
+	},
+	"United States (US)": {
+		rateUnderLimit: 0,
+		rateOverLimit:  0,
+	},
+	"Netherlands": {
+		rateUnderLimit: 0,
+		rateOverLimit:  0,
+	},
+}
+
+func (p *pdf) getSubTmpl(name string, paramKey string) error {
+	var tmpl []string
+	params := map[string]interface{}{}
+	buff := bytes.NewBuffer(nil)
+	for i, v := range p.params[paramKey].([]string) {
+		tmpl = append(tmpl, fmt.Sprintf("{{ .Param%d }}<br/>", i))
+		params[fmt.Sprintf("Param%d", i)] = v
+	}
+	if t, err := htmlp.New(name).Parse(strings.Join(tmpl, "")); err != nil {
+		return err
+	} else {
+		if err := t.ExecuteTemplate(buff, name, params); err != nil {
+			return err
+		}
+	}
+	p.params[name] = htmlp.HTML(buff.String())
+	return nil
+}
+
+func getVATRate(country string) *vat {
+	rate := vatMap[country]
+	if rate == nil {
+		return nil
+	}
+	return rate
+}
+
 func (p *pdf) regenerateInvoicePDF(path string) error {
+	var err error
+	var gatewayTotalPrice, discount, shipping float64
+	ac := accounting.Accounting{
+		Symbol:    "€",
+		Precision: 2,
+		Thousand:  ".",
+		Decimal:   ",",
+	}
+
+	if p.params["GatewayTotalPrice"] != nil {
+		gatewayTotalPrice, err = strconv.ParseFloat(p.params["GatewayTotalPrice"].(string), 64)
+		if err != nil {
+			return err
+		}
+	}
+	if p.params["Discount"] != nil {
+		discount, err = strconv.ParseFloat(p.params["Discount"].(string), 64)
+		if err != nil {
+			return err
+		}
+		tmpl, err := htmlp.New("discount").Parse(`
+<p style="position:absolute;top:592px;left:452px;white-space:nowrap" class="ft10">Discount:</p>
+<p style="position:absolute;top:592px;left:741px;white-space:nowrap" class="ft10">{{ .Discount }}</p>`)
+		if err != nil {
+			return err
+		}
+		buff := bytes.NewBuffer(nil)
+		p.params["Discount"] = fmt.Sprintf("-%s", ac.FormatMoney(discount))
+		if err := tmpl.ExecuteTemplate(buff, "discount", p.params); err != nil {
+			return err
+		}
+		p.params["Discount"] = htmlp.HTML(buff.String())
+	} else {
+		p.params["Discount"] = ""
+	}
+	if p.params["Shipping"] != nil {
+		shipping, err = strconv.ParseFloat(p.params["Shipping"].(string), 64)
+		if err != nil {
+			return err
+		}
+	} else {
+		p.params["Shipping"] = ""
+	}
+
+	var vatRate *vat
+	for _, v := range p.params["BillToList"].([]string) {
+		vatRate = getVATRate(v)
+		if vatRate != nil {
+			break
+		}
+	}
+	if vatRate == nil {
+		return fmt.Errorf("no vat rate found for billing address: %s", strings.Join(p.params["BillToList"].([]string), "\n"))
+	}
+	if err = p.getSubTmpl("BillTo", "BillToList"); err != nil {
+		return err
+	}
+	if err = p.getSubTmpl("ShipTo", "ShipToList"); err != nil {
+		return err
+	}
+	if err = p.getSubTmpl("InvoiceDetails", "InvoiceDetailsList"); err != nil {
+		return err
+	}
+
+	vatTotal := gatewayTotalPrice * vatRate.rateUnderLimit
+	gatewayPriceWithoutVAT := gatewayTotalPrice - vatTotal
+	totalExclVAT := gatewayTotalPrice + shipping - discount
+	total := totalExclVAT + vatTotal
+
+	p.params["Shipping"] = ac.FormatMoney(shipping)
+	p.params["GatewayTotalPrice"] = ac.FormatMoney(gatewayPriceWithoutVAT)
+	p.params["VATTotal"] = ac.FormatMoney(vatTotal)
+	p.params["VATPercentage"] = fmt.Sprintf("%s%%", strconv.FormatFloat(vatRate.rateUnderLimit*100, 'f', 2, 64))
+	p.params["TotalExclVAT"] = ac.FormatMoney(totalExclVAT)
+	p.params["Total"] = ac.FormatMoney(total)
+
 	template := p.tmpl.Lookup("invoice.pdf-html.tmpl")
 	if template == nil {
 		return fmt.Errorf("template invoice.pdf-html.tmpl not found")
 	}
-	p.params["BackgroundImg"] = base64.StdEncoding.EncodeToString(p.images["invoice.pdf001.png"])
 	buff := bytes.NewBuffer(nil)
 	if err := template.Execute(buff, p.params); err != nil {
 		return fmt.Errorf("failed to render template invoice.pdf-html.tmpl: %v", err)
 	}
-
-	if err := wrpdf.Init(); err != nil {
-		return fmt.Errorf("failted to init pdf library: %v", err)
-	}
-	defer wrpdf.Destroy()
 
 	object, err := wrpdf.NewObjectFromReader(buff)
 	if err != nil {
@@ -289,7 +401,6 @@ func (p *pdf) regenerateInvoicePDF(path string) error {
 	defer converter.Destroy()
 	converter.Add(object)
 	converter.PaperSize = wrpdf.A4
-
 	// Convert objects and save the output PDF document.
 	f, err := os.Stat(filepath.Join("invoice", "new"))
 	if err != nil && !os.IsNotExist(err) {
@@ -299,15 +410,13 @@ func (p *pdf) regenerateInvoicePDF(path string) error {
 			return err
 		}
 	}
-
 	outFile, err := os.Create(filepath.Join("invoice", "new", filepath.Base(path)))
 	if err != nil {
 		return fmt.Errorf("failed to create file %s: %v", path, err)
 	}
 	defer outFile.Close()
-
 	if err := converter.Run(outFile); err != nil {
-		log.Fatal(err)
+		return err
 	}
 	return nil
 }
