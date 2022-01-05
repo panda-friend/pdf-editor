@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/sirupsen/logrus"
 
@@ -130,28 +131,6 @@ func compareStringArray(a []string, b []string) bool {
 	return true
 }
 
-var pdfHead = []string{
-	"MatchX GmbH",
-	"Brückenstraße 4",
-	"10179 Berlin",
-	"Germany",
-	"Tax number: 37/436/50071",
-	"awesome@matchx.io",
-	"VAT ID: DE309834893",
-	"INVOICE NUMBER MUST BE INCLUDED WITH YOUR BANK PAYMENT OTHERWISE DELAYS",
-	"MAY OCCUR",
-	"1 of 1",
-}
-var pdfPaymentInfo = []string{
-	"Payment details:",
-	"Payment must be made within 30 days from issue date.",
-	"BIC: PBNKDEFF",
-	"IBAN: DE12 1001 0010 0685 1601 27",
-	"BANK: Post Bank",
-	"ACCOUNT HOLDER: MatchX GmbH",
-	"PayPal: info@matchx.io",
-}
-
 func (p *pdf) parseParamsFromPDF(path string) error {
 	f, r, err := rdpdf.Open(filepath.Join("invoice", path))
 	defer func() {
@@ -182,8 +161,8 @@ func (p *pdf) parseParamsFromPDF(path string) error {
 		}
 		if row[nextIdx+1] == "PAID" {
 			p.params["Status"] = "PAID"
-			nextIdx += 2
 		}
+		nextIdx += 2
 		// match invoice details
 		oldIdx := nextIdx
 		for i := 0; i < len(row); i++ {
@@ -249,6 +228,10 @@ func (p *pdf) parseParamsFromPDF(path string) error {
 				p.params["GatewayTotalPrice"] = strings.ReplaceAll(row[i+1], ".", "")
 				p.params["GatewayTotalPrice"] = strings.ReplaceAll(p.params["GatewayTotalPrice"].(string), ",", ".")
 			}
+			if row[i] == "Total:" {
+				p.params["Total"] = strings.ReplaceAll(row[i+1], ".", "")
+				p.params["Total"] = strings.ReplaceAll(p.params["Total"].(string), ",", ".")
+			}
 		}
 		if oldIdx == nextIdx {
 			return fmt.Errorf("not able to detect %s", pdfPaymentInfo[0])
@@ -262,6 +245,7 @@ func (p *pdf) parseParamsFromPDF(path string) error {
 }
 
 type vat struct {
+	dateReachLimit string
 	rateUnderLimit float64
 	rateOverLimit  float64
 }
@@ -285,85 +269,75 @@ func (p *pdf) getSubTmpl(name string, paramKey string) error {
 	return nil
 }
 
-var vatMap = map[string]*vat{
-	"Germany":        {rateUnderLimit: 0.19, rateOverLimit: 0.19},
-	"Netherlands":    {rateUnderLimit: 0.19, rateOverLimit: 0.21},
-	"Austria":        {rateUnderLimit: 0.19, rateOverLimit: 0.20},
-	"Belgium":        {rateUnderLimit: 0.19, rateOverLimit: 0.21},
-	"Bulgaria":       {rateUnderLimit: 0.19, rateOverLimit: 0.20},
-	"Croatia":        {rateUnderLimit: 0.19, rateOverLimit: 0.25},
-	"Cyprus":         {rateUnderLimit: 0.19, rateOverLimit: 0.19},
-	"Czech Republic": {rateUnderLimit: 0.19, rateOverLimit: 0.21},
-	"Denmark":        {rateUnderLimit: 0.19, rateOverLimit: 0.25},
-	"Estonia":        {rateUnderLimit: 0.19, rateOverLimit: 0.20},
-	"Finland":        {rateUnderLimit: 0.19, rateOverLimit: 0.24},
-	"France":         {rateUnderLimit: 0.19, rateOverLimit: 0.20},
-	"Greece":         {rateUnderLimit: 0.19, rateOverLimit: 0.24},
-	"Hungary":        {rateUnderLimit: 0.19, rateOverLimit: 0.27},
-	"Ireland":        {rateUnderLimit: 0.19, rateOverLimit: 0.23},
-	"Italy":          {rateUnderLimit: 0.19, rateOverLimit: 0.22},
-	"Latvia":         {rateUnderLimit: 0.19, rateOverLimit: 0.21},
-	"Lithuania":      {rateUnderLimit: 0.19, rateOverLimit: 0.21},
-	"Luxembourg":     {rateUnderLimit: 0.19, rateOverLimit: 0.17},
-	"Malta":          {rateUnderLimit: 0.19, rateOverLimit: 0.18},
-	"Monaco":         {rateUnderLimit: 0.19, rateOverLimit: 0.20},
-	"Poland":         {rateUnderLimit: 0.19, rateOverLimit: 0.23},
-	"Portugal":       {rateUnderLimit: 0.19, rateOverLimit: 0.23},
-	"Romania":        {rateUnderLimit: 0.19, rateOverLimit: 0.19},
-	"Slovakia":       {rateUnderLimit: 0.19, rateOverLimit: 0.20},
-	"Slovenia":       {rateUnderLimit: 0.19, rateOverLimit: 0.22},
-	"Spain":          {rateUnderLimit: 0.19, rateOverLimit: 0.21},
-	"Sweden":         {rateUnderLimit: 0.19, rateOverLimit: 0.25},
-	"UK":             {rateUnderLimit: 0.19, rateOverLimit: 0.20},
-}
-var vatCountryCode = map[string]string{
-	"DE": "Germany",
-	"NL": "Netherlands",
-	"AT": "Austria",
-	"BE": "Belgium",
-	"BG": "Bulgaria",
-	"HR": "Croatia",
-	"CY": "Cyprus",
-	"CZ": "Czech Republic",
-	"DK": "Denmark",
-	"EE": "Estonia",
-	"FI": "Finland",
-	"FR": "France",
-	"EL": "Greece",
-	"HU": "Hungary",
-	"IE": "Ireland",
-	"IT": "Italy",
-	"LV": "Latvia",
-	"LT": "Lithuania",
-	"LU": "Luxembourg",
-	"MT": "Malta",
-	"PL": "Poland",
-	"PT": "Portugal",
-	"RO": "Romania",
-	"SK": "Slovakia",
-	"SI": "Slovenia",
-	"ES": "Spain",
-	"SE": "Sweden",
-	"GB": "UK",
-	"XI": "UK",
+func parseTime(layout string, date string) (time.Time, error) {
+	if layout == dateLayout1 {
+		tmpStrArray := strings.Split(strings.ReplaceAll(date, ",", ""), " ")
+		day, err := strconv.Atoi(tmpStrArray[1])
+		if err != nil {
+			return time.Time{}, err
+		}
+		year, err := strconv.Atoi(tmpStrArray[2])
+		if err != nil {
+			return time.Time{}, err
+		}
+		formatTime := time.Date(year, time.Month(month[tmpStrArray[0]]), day, 0, 0, 0, 0, time.UTC)
+		return formatTime, nil
+	}
+	if layout == dateLayout2 {
+		tmpStrArray := strings.Split(date, ".")
+		day, err := strconv.Atoi(tmpStrArray[0])
+		if err != nil {
+			return time.Time{}, err
+		}
+		month, err := strconv.Atoi(tmpStrArray[1])
+		if err != nil {
+			return time.Time{}, err
+		}
+		year, err := strconv.Atoi(tmpStrArray[2])
+		if err != nil {
+			return time.Time{}, err
+		}
+		formatTime := time.Date(year, time.Month(month), day, 0, 0, 0, 0, time.UTC)
+		return formatTime, nil
+	}
+	return time.Time{}, fmt.Errorf("layout invalid")
 }
 
-func getVATRate(country string) *vat {
-	fmt.Println(country)
-	if strings.Contains(country, "VAT Number:") {
-		country = vatCountryCode[country[12:14]]
+func getVATRate(countryKey, country string, issueDateStr string) (float64, error) {
+	if strings.Contains(countryKey, "VAT Number:") {
+		country = vatCountryCode[country[:2]]
 	}
+	var vatItem *vat
 	for k, v := range vatMap {
 		if strings.Contains(country, k) {
-			return v
+			vatItem = v
+			break
 		}
 	}
-	return vatMap["Germany"]
+	if vatItem == nil {
+		return vatMap["Germany"].rateUnderLimit, nil
+	}
+	// other countries
+	if vatItem.dateReachLimit == "" {
+		return vatItem.rateUnderLimit, nil
+	}
+	issueDate, err := parseTime(dateLayout1, issueDateStr[14:])
+	if err != nil {
+		return 0, err
+	}
+	dateReachLimit, err := parseTime(dateLayout2, vatItem.dateReachLimit)
+	if err != nil {
+		return 0, err
+	}
+	if issueDate.After(dateReachLimit) {
+		return vatItem.rateOverLimit, nil
+	}
+	return vatItem.rateUnderLimit, nil
 }
 
 func (p *pdf) regenerateInvoicePDF(path string) error {
 	var err error
-	var gatewayTotalPrice, discount, shipping float64
+	var gatewayTotalPrice, discount, shipping, total float64
 	ac := accounting.Accounting{
 		Symbol:    "€",
 		Precision: 2,
@@ -381,18 +355,6 @@ func (p *pdf) regenerateInvoicePDF(path string) error {
 		if err != nil {
 			return err
 		}
-		tmpl, err := htmlp.New("discount").Parse(`
-<p style="position:absolute;top:592px;left:452px;white-space:nowrap" class="ft10">Discount:</p>
-<p style="position:absolute;top:592px;left:741px;white-space:nowrap" class="ft10">{{ .Discount }}</p>`)
-		if err != nil {
-			return err
-		}
-		buff := bytes.NewBuffer(nil)
-		p.params["Discount"] = fmt.Sprintf("-%s", ac.FormatMoney(discount))
-		if err := tmpl.ExecuteTemplate(buff, "discount", p.params); err != nil {
-			return err
-		}
-		p.params["Discount"] = htmlp.HTML(buff.String())
 	}
 	if p.params["Shipping"] != nil {
 		if p.params["Shipping"].(string) == "Free shipping" {
@@ -404,11 +366,18 @@ func (p *pdf) regenerateInvoicePDF(path string) error {
 			}
 		}
 	}
+	if p.params["Total"] != nil {
+		total, err = strconv.ParseFloat(p.params["Total"].(string), 64)
+		if err != nil {
+			return err
+		}
+	}
 
+	countryKey := p.params["BillToList"].([]string)[len(p.params["BillToList"].([]string))-2]
 	country := p.params["BillToList"].([]string)[len(p.params["BillToList"].([]string))-1]
-	vatRate := getVATRate(country)
-	if vatRate == nil {
-		return fmt.Errorf("no vat rate found for billing address: %s", strings.Join(p.params["BillToList"].([]string), "\n"))
+	vatRate, err := getVATRate(countryKey, country, p.params["InvoiceDetailsList"].([]string)[1])
+	if err != nil {
+		return err
 	}
 	if err = p.getSubTmpl("BillTo", "BillToList"); err != nil {
 		return err
@@ -420,20 +389,43 @@ func (p *pdf) regenerateInvoicePDF(path string) error {
 		return err
 	}
 
-	vatTotal := gatewayTotalPrice * vatRate.rateUnderLimit
-	gatewayPriceWithoutVAT := gatewayTotalPrice - vatTotal
+	vatTotal := gatewayTotalPrice * vatRate
+	margin := gatewayTotalPrice + vatTotal + shipping - discount - total
+	if discount != 0 {
+		discount += margin
+	} else {
+		if shipping < margin {
+			discount += margin
+		} else {
+			shipping -= margin
+		}
+	}
 	totalExclVAT := gatewayTotalPrice + shipping - discount
-	total := totalExclVAT + vatTotal
+	total = totalExclVAT + vatTotal
 
+	// discount
+	tmpl, err := htmlp.New("discount").Parse(`
+<p style="position:absolute;top:592px;left:452px;white-space:nowrap" class="ft10">Discount:</p>
+<p style="position:absolute;top:592px;left:741px;white-space:nowrap" class="ft10">{{ .Discount }}</p>`)
+	if err != nil {
+		return err
+	}
+	discountBuff := bytes.NewBuffer(nil)
+	p.params["Discount"] = fmt.Sprintf("-%s", ac.FormatMoney(discount))
+	if err := tmpl.ExecuteTemplate(discountBuff, "discount", p.params); err != nil {
+		return err
+	}
+	p.params["Discount"] = htmlp.HTML(discountBuff.String())
+	// shipping
 	if shipping == 0 {
 		p.params["Shipping"] = "Free shipping"
 	} else {
 		p.params["Shipping"] = ac.FormatMoney(shipping)
 	}
 
-	p.params["GatewayTotalPrice"] = ac.FormatMoney(gatewayPriceWithoutVAT)
+	p.params["GatewayTotalPrice"] = ac.FormatMoney(gatewayTotalPrice)
 	p.params["VATTotal"] = ac.FormatMoney(vatTotal)
-	p.params["VATPercentage"] = fmt.Sprintf("%s%%", strconv.FormatFloat(vatRate.rateUnderLimit*100, 'f', 2, 64))
+	p.params["VATPercentage"] = fmt.Sprintf("%s%%", strconv.FormatFloat(vatRate*100, 'f', 2, 64))
 	p.params["TotalExclVAT"] = ac.FormatMoney(totalExclVAT)
 	p.params["Total"] = ac.FormatMoney(total)
 
