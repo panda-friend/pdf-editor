@@ -23,6 +23,7 @@ var pdfPaymentInfo = []string{
 }
 
 var vatMap = map[string]*vat{
+	"US":             {dateReachLimit: "", rateUnderLimit: 0, rateOverLimit: 0},
 	"Germany":        {dateReachLimit: "", rateUnderLimit: 0.19, rateOverLimit: 0.19},
 	"Netherlands":    {dateReachLimit: "14.01.2021", rateUnderLimit: 0.19, rateOverLimit: 0.21},
 	"Austria":        {dateReachLimit: "10.05.2021", rateUnderLimit: 0.19, rateOverLimit: 0.20},
