@@ -1,5 +1,6 @@
 package invoice
 
+import "C"
 import (
 	"bytes"
 	"embed"
@@ -11,7 +12,8 @@ import (
 	"strconv"
 	"strings"
 
-	wrpdf "github.com/adrg/go-wkhtmltopdf"
+	"github.com/sirupsen/logrus"
+
 	rdpdf "github.com/ledongthuc/pdf"
 	"github.com/leekchan/accounting"
 )
@@ -100,11 +102,13 @@ func (c *PDFCreator) RecreatePDF() error {
 		}
 		err = pdfObj.parseParamsFromPDF(path)
 		if err != nil {
-			return err
+			logrus.Error(err)
+			return nil
 		}
 		err = pdfObj.regenerateInvoicePDF(path)
 		if err != nil {
-			return err
+			logrus.Error(err)
+			return nil
 		}
 		return nil
 	})
@@ -262,21 +266,6 @@ type vat struct {
 	rateOverLimit  float64
 }
 
-var vatMap = map[string]*vat{
-	"Germany": {
-		rateOverLimit:  0.19,
-		rateUnderLimit: 0.19,
-	},
-	"United States (US)": {
-		rateUnderLimit: 0,
-		rateOverLimit:  0,
-	},
-	"Netherlands": {
-		rateUnderLimit: 0,
-		rateOverLimit:  0,
-	},
-}
-
 func (p *pdf) getSubTmpl(name string, paramKey string) error {
 	var tmpl []string
 	params := map[string]interface{}{}
@@ -296,12 +285,80 @@ func (p *pdf) getSubTmpl(name string, paramKey string) error {
 	return nil
 }
 
+var vatMap = map[string]*vat{
+	"Germany":        {rateUnderLimit: 0.19, rateOverLimit: 0.19},
+	"Netherlands":    {rateUnderLimit: 0.19, rateOverLimit: 0.21},
+	"Austria":        {rateUnderLimit: 0.19, rateOverLimit: 0.20},
+	"Belgium":        {rateUnderLimit: 0.19, rateOverLimit: 0.21},
+	"Bulgaria":       {rateUnderLimit: 0.19, rateOverLimit: 0.20},
+	"Croatia":        {rateUnderLimit: 0.19, rateOverLimit: 0.25},
+	"Cyprus":         {rateUnderLimit: 0.19, rateOverLimit: 0.19},
+	"Czech Republic": {rateUnderLimit: 0.19, rateOverLimit: 0.21},
+	"Denmark":        {rateUnderLimit: 0.19, rateOverLimit: 0.25},
+	"Estonia":        {rateUnderLimit: 0.19, rateOverLimit: 0.20},
+	"Finland":        {rateUnderLimit: 0.19, rateOverLimit: 0.24},
+	"France":         {rateUnderLimit: 0.19, rateOverLimit: 0.20},
+	"Greece":         {rateUnderLimit: 0.19, rateOverLimit: 0.24},
+	"Hungary":        {rateUnderLimit: 0.19, rateOverLimit: 0.27},
+	"Ireland":        {rateUnderLimit: 0.19, rateOverLimit: 0.23},
+	"Italy":          {rateUnderLimit: 0.19, rateOverLimit: 0.22},
+	"Latvia":         {rateUnderLimit: 0.19, rateOverLimit: 0.21},
+	"Lithuania":      {rateUnderLimit: 0.19, rateOverLimit: 0.21},
+	"Luxembourg":     {rateUnderLimit: 0.19, rateOverLimit: 0.17},
+	"Malta":          {rateUnderLimit: 0.19, rateOverLimit: 0.18},
+	"Monaco":         {rateUnderLimit: 0.19, rateOverLimit: 0.20},
+	"Poland":         {rateUnderLimit: 0.19, rateOverLimit: 0.23},
+	"Portugal":       {rateUnderLimit: 0.19, rateOverLimit: 0.23},
+	"Romania":        {rateUnderLimit: 0.19, rateOverLimit: 0.19},
+	"Slovakia":       {rateUnderLimit: 0.19, rateOverLimit: 0.20},
+	"Slovenia":       {rateUnderLimit: 0.19, rateOverLimit: 0.22},
+	"Spain":          {rateUnderLimit: 0.19, rateOverLimit: 0.21},
+	"Sweden":         {rateUnderLimit: 0.19, rateOverLimit: 0.25},
+	"UK":             {rateUnderLimit: 0.19, rateOverLimit: 0.20},
+}
+var vatCountryCode = map[string]string{
+	"DE": "Germany",
+	"NL": "Netherlands",
+	"AT": "Austria",
+	"BE": "Belgium",
+	"BG": "Bulgaria",
+	"HR": "Croatia",
+	"CY": "Cyprus",
+	"CZ": "Czech Republic",
+	"DK": "Denmark",
+	"EE": "Estonia",
+	"FI": "Finland",
+	"FR": "France",
+	"EL": "Greece",
+	"HU": "Hungary",
+	"IE": "Ireland",
+	"IT": "Italy",
+	"LV": "Latvia",
+	"LT": "Lithuania",
+	"LU": "Luxembourg",
+	"MT": "Malta",
+	"PL": "Poland",
+	"PT": "Portugal",
+	"RO": "Romania",
+	"SK": "Slovakia",
+	"SI": "Slovenia",
+	"ES": "Spain",
+	"SE": "Sweden",
+	"GB": "UK",
+	"XI": "UK",
+}
+
 func getVATRate(country string) *vat {
-	rate := vatMap[country]
-	if rate == nil {
-		return nil
+	fmt.Println(country)
+	if strings.Contains(country, "VAT Number:") {
+		country = vatCountryCode[country[12:14]]
 	}
-	return rate
+	for k, v := range vatMap {
+		if strings.Contains(country, k) {
+			return v
+		}
+	}
+	return vatMap["Germany"]
 }
 
 func (p *pdf) regenerateInvoicePDF(path string) error {
@@ -313,7 +370,6 @@ func (p *pdf) regenerateInvoicePDF(path string) error {
 		Thousand:  ".",
 		Decimal:   ",",
 	}
-
 	if p.params["GatewayTotalPrice"] != nil {
 		gatewayTotalPrice, err = strconv.ParseFloat(p.params["GatewayTotalPrice"].(string), 64)
 		if err != nil {
@@ -337,25 +393,20 @@ func (p *pdf) regenerateInvoicePDF(path string) error {
 			return err
 		}
 		p.params["Discount"] = htmlp.HTML(buff.String())
-	} else {
-		p.params["Discount"] = ""
 	}
 	if p.params["Shipping"] != nil {
-		shipping, err = strconv.ParseFloat(p.params["Shipping"].(string), 64)
-		if err != nil {
-			return err
+		if p.params["Shipping"].(string) == "Free shipping" {
+			shipping = 0
+		} else {
+			shipping, err = strconv.ParseFloat(p.params["Shipping"].(string), 64)
+			if err != nil {
+				return err
+			}
 		}
-	} else {
-		p.params["Shipping"] = ""
 	}
 
-	var vatRate *vat
-	for _, v := range p.params["BillToList"].([]string) {
-		vatRate = getVATRate(v)
-		if vatRate != nil {
-			break
-		}
-	}
+	country := p.params["BillToList"].([]string)[len(p.params["BillToList"].([]string))-1]
+	vatRate := getVATRate(country)
 	if vatRate == nil {
 		return fmt.Errorf("no vat rate found for billing address: %s", strings.Join(p.params["BillToList"].([]string), "\n"))
 	}
@@ -374,7 +425,12 @@ func (p *pdf) regenerateInvoicePDF(path string) error {
 	totalExclVAT := gatewayTotalPrice + shipping - discount
 	total := totalExclVAT + vatTotal
 
-	p.params["Shipping"] = ac.FormatMoney(shipping)
+	if shipping == 0 {
+		p.params["Shipping"] = "Free shipping"
+	} else {
+		p.params["Shipping"] = ac.FormatMoney(shipping)
+	}
+
 	p.params["GatewayTotalPrice"] = ac.FormatMoney(gatewayPriceWithoutVAT)
 	p.params["VATTotal"] = ac.FormatMoney(vatTotal)
 	p.params["VATPercentage"] = fmt.Sprintf("%s%%", strconv.FormatFloat(vatRate.rateUnderLimit*100, 'f', 2, 64))
@@ -390,17 +446,6 @@ func (p *pdf) regenerateInvoicePDF(path string) error {
 		return fmt.Errorf("failed to render template invoice.pdf-html.tmpl: %v", err)
 	}
 
-	object, err := wrpdf.NewObjectFromReader(buff)
-	if err != nil {
-		return fmt.Errorf("cannot create new pdf object: %v", err)
-	}
-	converter, err := wrpdf.NewConverter()
-	if err != nil {
-		return fmt.Errorf("cannot create new converter: %v", err)
-	}
-	defer converter.Destroy()
-	converter.Add(object)
-	converter.PaperSize = wrpdf.A4
 	// Convert objects and save the output PDF document.
 	f, err := os.Stat(filepath.Join("invoice", "new"))
 	if err != nil && !os.IsNotExist(err) {
@@ -410,13 +455,17 @@ func (p *pdf) regenerateInvoicePDF(path string) error {
 			return err
 		}
 	}
-	outFile, err := os.Create(filepath.Join("invoice", "new", filepath.Base(path)))
+	outFile, err := os.Create(filepath.Join("invoice", "new", fmt.Sprintf("%s.html", filepath.Base(path))))
 	if err != nil {
 		return fmt.Errorf("failed to create file %s: %v", path, err)
 	}
 	defer outFile.Close()
-	if err := converter.Run(outFile); err != nil {
+	if _, err = outFile.Write(buff.Bytes()); err != nil {
 		return err
 	}
+	if err = outFile.Sync(); err != nil {
+		return err
+	}
+
 	return nil
 }

@@ -1,7 +1,6 @@
 package main
 
 import (
-	"fmt"
 	"os"
 
 	"github.com/sirupsen/logrus"
@@ -50,7 +49,6 @@ func ReadPdfInRow(r *rdpdf.Reader) ([][]string, error) {
 					continue
 				}
 				joinRow = append(joinRow, v.S)
-				fmt.Println(v.S)
 			}
 			content = append(content, joinRow)
 		}
