@@ -52,7 +52,8 @@ var vatMap = map[string]*vat{
 	"Slovenia":       {dateReachLimit: "25.09.2021", rateUnderLimit: 0.19, rateOverLimit: 0.22},
 	"Spain":          {dateReachLimit: "24.04.2021", rateUnderLimit: 0.19, rateOverLimit: 0.21},
 	"Sweden":         {dateReachLimit: "06.05.2021", rateUnderLimit: 0.19, rateOverLimit: 0.25},
-	"UK":             {dateReachLimit: "", rateUnderLimit: 0.19, rateOverLimit: 0.20},
+	"UK":             {dateReachLimit: "", rateUnderLimit: 0, rateOverLimit: 0},
+	"South Korea":    {dateReachLimit: "", rateUnderLimit: 0, rateOverLimit: 0},
 }
 var vatCountryCode = map[string]string{
 	"DE": "Germany",
