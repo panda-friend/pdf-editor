@@ -162,7 +162,12 @@ func (p *pdf) parseParamsFromPDF(path string) error {
 		if row[nextIdx+1] == "PAID" {
 			p.params["Status"] = "PAID"
 		}
-		nextIdx += 2
+		if strings.Contains(row[nextIdx+2], "Invoice #:") {
+			nextIdx = nextIdx + 2
+		}
+		if strings.Contains(row[nextIdx+1], "Invoice #:") {
+			nextIdx = nextIdx + 1
+		}
 		// match invoice details
 		oldIdx := nextIdx
 		for i := 0; i < len(row); i++ {
@@ -304,12 +309,12 @@ func parseTime(layout string, date string) (time.Time, error) {
 }
 
 func getVATRate(countryKey, country string, issueDateStr string) (float64, error) {
-	if strings.Contains(countryKey, "VAT Number:") {
-		country = vatCountryCode[country[:2]]
+	if strings.Contains(countryKey, "VAT Number:") || strings.Contains(country, "VAT Number:") {
+		return 0, nil
 	}
 	var vatItem *vat
 	for k, v := range vatMap {
-		if strings.Contains(country, k) {
+		if strings.Contains(country, k) || strings.Contains(strings.Join([]string{countryKey, country}, " "), k) {
 			vatItem = v
 			break
 		}
