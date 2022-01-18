@@ -320,6 +320,8 @@ func getVATRate(countryKey, country string, issueDateStr string) (float64, error
 		}
 	}
 	if vatItem == nil {
+		fmt.Println(countryKey)
+		fmt.Println(country)
 		return vatMap["Germany"].rateUnderLimit, nil
 	}
 	// other countries
